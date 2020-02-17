@@ -32,6 +32,7 @@ import org.apache.iceberg.ManifestEntriesTable;
 import org.apache.iceberg.ManifestsTable;
 import org.apache.iceberg.MetadataTableType;
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.PartitionsTable;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.SnapshotsTable;
 import org.apache.iceberg.Table;
@@ -106,6 +107,8 @@ public class HadoopTables implements Tables, Configurable {
         return new SnapshotsTable(ops, baseTable);
       case MANIFESTS:
         return new ManifestsTable(ops, baseTable);
+      case PARTITIONS:
+        return new PartitionsTable(ops, baseTable);
       default:
         throw new NoSuchTableException(String.format("Unknown metadata table type: %s for %s", type, location));
     }
@@ -133,7 +136,7 @@ public class HadoopTables implements Tables, Configurable {
 
     Map<String, String> tableProps = properties == null ? ImmutableMap.of() : properties;
     PartitionSpec partitionSpec = spec == null ? PartitionSpec.unpartitioned() : spec;
-    TableMetadata metadata = TableMetadata.newTableMetadata(ops, schema, partitionSpec, location, tableProps);
+    TableMetadata metadata = TableMetadata.newTableMetadata(schema, partitionSpec, location, tableProps);
     ops.commit(null, metadata);
 
     return new BaseTable(ops, location);

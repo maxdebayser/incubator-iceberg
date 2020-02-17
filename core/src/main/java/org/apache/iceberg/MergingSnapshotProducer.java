@@ -57,6 +57,8 @@ import static org.apache.iceberg.TableProperties.MANIFEST_MIN_MERGE_COUNT;
 import static org.apache.iceberg.TableProperties.MANIFEST_MIN_MERGE_COUNT_DEFAULT;
 import static org.apache.iceberg.TableProperties.MANIFEST_TARGET_SIZE_BYTES;
 import static org.apache.iceberg.TableProperties.MANIFEST_TARGET_SIZE_BYTES_DEFAULT;
+import static org.apache.iceberg.TableProperties.SNAPSHOT_ID_INHERITANCE_ENABLED;
+import static org.apache.iceberg.TableProperties.SNAPSHOT_ID_INHERITANCE_ENABLED_DEFAULT;
 
 abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
   private static final Logger LOG = LoggerFactory.getLogger(MergingSnapshotProducer.class);
@@ -82,11 +84,13 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
   private final int minManifestsCountToMerge;
   private final SnapshotSummary.Builder summaryBuilder = SnapshotSummary.builder();
   private final boolean mergeEnabled;
+  private final boolean snapshotIdInheritanceEnabled;
 
   // update data
   private final AtomicInteger manifestCount = new AtomicInteger(0);
   private final List<DataFile> newFiles = Lists.newArrayList();
   private final List<ManifestFile> appendManifests = Lists.newArrayList();
+  private final List<ManifestFile> rewrittenAppendManifests = Lists.newArrayList();
   private final SnapshotSummary.Builder appendedManifestsSummary = SnapshotSummary.builder();
   private final Set<CharSequenceWrapper> deletePaths = Sets.newHashSet();
   private final Set<StructLikeWrapper> deleteFilePartitions = Sets.newHashSet();
@@ -98,6 +102,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
 
   // cache the new manifest once it is written
   private ManifestFile cachedNewManifest = null;
+  private ManifestFile firstAppendedManifest = null;
   private boolean hasNewFiles = false;
 
   // cache merge results to reuse when retrying
@@ -122,6 +127,8 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
         .propertyAsInt(MANIFEST_MIN_MERGE_COUNT, MANIFEST_MIN_MERGE_COUNT_DEFAULT);
     this.mergeEnabled = ops.current()
         .propertyAsBoolean(TableProperties.MANIFEST_MERGE_ENABLED, TableProperties.MANIFEST_MERGE_ENABLED_DEFAULT);
+    this.snapshotIdInheritanceEnabled = ops.current()
+        .propertyAsBoolean(SNAPSHOT_ID_INHERITANCE_ENABLED, SNAPSHOT_ID_INHERITANCE_ENABLED_DEFAULT);
   }
 
   @Override
@@ -202,11 +209,29 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
    * Add all files in a manifest to the new snapshot.
    */
   protected void add(ManifestFile manifest) {
-    // the manifest must be rewritten with this update's snapshot ID
-    try (ManifestReader reader = ManifestReader.read(
-        ops.io().newInputFile(manifest.path()), ops.current().specsById())) {
-      appendManifests.add(ManifestWriter.copyAppendManifest(
-          reader, manifestPath(manifestCount.getAndIncrement()), snapshotId(), appendedManifestsSummary));
+    ManifestFile appendedManifest;
+    if (snapshotIdInheritanceEnabled && manifest.snapshotId() == null) {
+      appendedManifestsSummary.addedManifest(manifest);
+      appendManifests.add(manifest);
+      appendedManifest = manifest;
+    } else {
+      // the manifest must be rewritten with this update's snapshot ID
+      ManifestFile copiedManifest = copyManifest(manifest);
+      rewrittenAppendManifests.add(copiedManifest);
+      appendedManifest = copiedManifest;
+    }
+
+    // keep reference of the first appended manifest, so that we can avoid merging first bin(s)
+    // which has the first appended manifest and have not crossed the limit of minManifestsCountToMerge
+    if (firstAppendedManifest == null) {
+      firstAppendedManifest = appendedManifest;
+    }
+  }
+
+  private ManifestFile copyManifest(ManifestFile manifest) {
+    try (ManifestReader reader = ManifestReader.read(manifest, ops.io(), ops.current().specsById())) {
+      OutputFile newManifestPath = manifestPath(manifestCount.getAndIncrement());
+      return ManifestWriter.copyAppendManifest(reader, newManifestPath, snapshotId(), appendedManifestsSummary);
     } catch (IOException e) {
       throw new RuntimeIOException(e, "Failed to close manifest: %s", manifest);
     }
@@ -243,10 +268,16 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
           summaryBuilder.addedFile(spec, file);
         }
 
-        newManifests = Iterables.concat(ImmutableList.of(newFilesAsManifest()), appendManifests);
+        ManifestFile newManifest = newFilesAsManifest();
+        newManifests = Iterables.concat(ImmutableList.of(newManifest), appendManifests, rewrittenAppendManifests);
       } else {
-        newManifests = appendManifests;
+        newManifests = Iterables.concat(appendManifests, rewrittenAppendManifests);
       }
+
+      // TODO: add sequence numbers here
+      Iterable<ManifestFile> newManifestsWithMetadata = Iterables.transform(
+          newManifests,
+          manifest -> GenericManifestFile.copyOf(manifest).withSnapshotId(snapshotId()).build());
 
       // filter any existing manifests
       List<ManifestFile> filtered;
@@ -258,7 +289,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       }
 
       Iterable<ManifestFile> unmergedManifests = Iterables.filter(
-          Iterables.concat(newManifests, filtered),
+          Iterables.concat(newManifestsWithMetadata, filtered),
           // only keep manifests that have live data files or that were written by this commit
           manifest -> manifest.hasAddedFiles() || manifest.hasExistingFiles() || manifest.snapshotId() == snapshotId());
 
@@ -374,9 +405,21 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       this.cachedNewManifest = null;
     }
 
-    for (ManifestFile manifest : appendManifests) {
+    // rewritten manifests are always owned by the table
+    for (ManifestFile manifest : rewrittenAppendManifests) {
       if (!committed.contains(manifest)) {
         deleteFile(manifest.path());
+      }
+    }
+
+    // manifests that are not rewritten are only owned by the table if the commit succeeded
+    if (!committed.isEmpty()) {
+      // the commit succeeded if at least one manifest was committed
+      // the table now owns appendManifests; clean up any that are not used
+      for (ManifestFile manifest : appendManifests) {
+        if (!committed.contains(manifest)) {
+          deleteFile(manifest.path());
+        }
       }
     }
   }
@@ -440,8 +483,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       return manifest;
     }
 
-    try (ManifestReader reader = ManifestReader.read(
-        ops.io().newInputFile(manifest.path()), ops.current().specsById())) {
+    try (ManifestReader reader = ManifestReader.read(manifest, ops.io(), ops.current().specsById())) {
 
       // this is reused to compare file paths with the delete set
       CharSequenceWrapper pathWrapper = CharSequenceWrapper.wrap("");
@@ -589,10 +631,11 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
             return;
           }
 
-          // if the bin has a new manifest (the new data files) then only merge it if the number of
-          // manifests is above the minimum count. this is applied only to bins with an in-memory
+          // if the bin has a new manifest (the new data files) or appended manifest file then only merge it
+          // if the number of manifests is above the minimum count. this is applied only to bins with an in-memory
           // manifest so that large manifests don't prevent merging older groups.
-          if (bin.contains(cachedNewManifest) && bin.size() < minManifestsCountToMerge) {
+          if ((bin.contains(cachedNewManifest) || bin.contains(firstAppendedManifest)) &&
+              bin.size() < minManifestsCountToMerge) {
             // not enough to merge, add all manifest files to the output list
             outputManifests.addAll(bin);
           } else {
@@ -617,8 +660,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
     ManifestWriter writer = new ManifestWriter(ops.current().spec(specId), out, snapshotId());
     try {
       for (ManifestFile manifest : bin) {
-        try (ManifestReader reader = ManifestReader.read(
-            ops.io().newInputFile(manifest.path()), ops.current().specsById())) {
+        try (ManifestReader reader = ManifestReader.read(manifest, ops.io(), ops.current().specsById())) {
           for (ManifestEntry entry : reader.entries()) {
             if (entry.status() == Status.DELETED) {
               // suppress deletes from previous snapshots. only files deleted by this snapshot

@@ -44,7 +44,6 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
-import static org.apache.iceberg.Files.localInput;
 import static org.apache.iceberg.types.Types.NestedField.optional;
 
 public class TestParquetWrite {
@@ -104,7 +103,7 @@ public class TestParquetWrite {
     Assert.assertEquals("Number of rows should match", expected.size(), actual.size());
     Assert.assertEquals("Result rows should match", expected, actual);
     for (ManifestFile manifest : table.currentSnapshot().manifests()) {
-      for (DataFile file : ManifestReader.read(localInput(manifest.path()), null)) {
+      for (DataFile file : ManifestReader.read(manifest, table.io())) {
         Assert.assertNotNull("Split offsets not present", file.splitOffsets());
         Assert.assertEquals("Should have reported record count as 1", 1, file.recordCount());
         Assert.assertNotNull("Column sizes metric not present", file.columnSizes());
@@ -286,7 +285,7 @@ public class TestParquetWrite {
 
     List<DataFile> files = Lists.newArrayList();
     for (ManifestFile manifest : table.currentSnapshot().manifests()) {
-      for (DataFile file : ManifestReader.read(localInput(manifest.path()), null)) {
+      for (DataFile file : ManifestReader.read(manifest, table.io())) {
         files.add(file);
       }
     }
@@ -331,11 +330,82 @@ public class TestParquetWrite {
 
     List<DataFile> files = Lists.newArrayList();
     for (ManifestFile manifest : table.currentSnapshot().manifests()) {
-      for (DataFile file : ManifestReader.read(localInput(manifest.path()), null)) {
+      for (DataFile file : ManifestReader.read(manifest, table.io())) {
         files.add(file);
       }
     }
     Assert.assertEquals("Should have 8 DataFiles", 8, files.size());
     Assert.assertTrue("All DataFiles contain 1000 rows", files.stream().allMatch(d -> d.recordCount() == 1000));
+  }
+
+  @Test
+  public void testWriteProjection() throws IOException {
+    File parent = temp.newFolder("parquet");
+    File location = new File(parent, "test");
+
+    HadoopTables tables = new HadoopTables(CONF);
+    PartitionSpec spec = PartitionSpec.unpartitioned();
+    Table table = tables.create(SCHEMA, spec, location.toString());
+
+    List<SimpleRecord> expected = Lists.newArrayList(
+        new SimpleRecord(1, null),
+        new SimpleRecord(2, null),
+        new SimpleRecord(3, null)
+    );
+
+    Dataset<Row> df = spark.createDataFrame(expected, SimpleRecord.class);
+
+    df.select("id").write() // select only id column
+        .format("iceberg")
+        .mode("append")
+        .save(location.toString());
+
+    table.refresh();
+
+    Dataset<Row> result = spark.read()
+        .format("iceberg")
+        .load(location.toString());
+
+    List<SimpleRecord> actual = result.orderBy("id").as(Encoders.bean(SimpleRecord.class)).collectAsList();
+    Assert.assertEquals("Number of rows should match", expected.size(), actual.size());
+    Assert.assertEquals("Result rows should match", expected, actual);
+  }
+
+  @Test
+  public void testWriteProjectionWithMiddle() throws IOException {
+    File parent = temp.newFolder("parquet");
+    File location = new File(parent, "test");
+
+    HadoopTables tables = new HadoopTables(CONF);
+    PartitionSpec spec = PartitionSpec.unpartitioned();
+    Schema schema = new Schema(
+        optional(1, "c1", Types.IntegerType.get()),
+        optional(2, "c2", Types.StringType.get()),
+        optional(3, "c3", Types.StringType.get())
+    );
+    Table table = tables.create(schema, spec, location.toString());
+
+    List<ThreeColumnRecord> expected = Lists.newArrayList(
+        new ThreeColumnRecord(1, null, "hello"),
+        new ThreeColumnRecord(2, null, "world"),
+        new ThreeColumnRecord(3, null, null)
+    );
+
+    Dataset<Row> df = spark.createDataFrame(expected, ThreeColumnRecord.class);
+
+    df.select("c1", "c3").write()
+        .format("iceberg")
+        .mode("append")
+        .save(location.toString());
+
+    table.refresh();
+
+    Dataset<Row> result = spark.read()
+        .format("iceberg")
+        .load(location.toString());
+
+    List<ThreeColumnRecord> actual = result.orderBy("c1").as(Encoders.bean(ThreeColumnRecord.class)).collectAsList();
+    Assert.assertEquals("Number of rows should match", expected.size(), actual.size());
+    Assert.assertEquals("Result rows should match", expected, actual);
   }
 }

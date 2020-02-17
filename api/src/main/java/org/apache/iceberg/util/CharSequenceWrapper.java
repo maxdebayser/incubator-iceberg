@@ -49,8 +49,7 @@ public class CharSequenceWrapper implements CharSequence, Serializable {
   public boolean equals(Object other) {
     if (this == other) {
       return true;
-    }
-    if (other == null || getClass() != other.getClass()) {
+    } else if (!(other instanceof CharSequenceWrapper)) {
       return false;
     }
 
@@ -81,5 +80,10 @@ public class CharSequenceWrapper implements CharSequence, Serializable {
   @Override
   public CharSequence subSequence(int start, int end) {
     return wrapped.subSequence(start, end);
+  }
+
+  @Override
+  public String toString() {
+    return wrapped.toString();
   }
 }

@@ -247,7 +247,7 @@ public class Types {
     public boolean equals(Object o) {
       if (this == o) {
         return true;
-      } else if (o == null || getClass() != o.getClass()) {
+      } else if (!(o instanceof TimestampType)) {
         return false;
       }
 
@@ -326,7 +326,7 @@ public class Types {
     public boolean equals(Object o) {
       if (this == o) {
         return true;
-      } else if (o == null || getClass() != o.getClass()) {
+      } else if (!(o instanceof FixedType)) {
         return false;
       }
 
@@ -395,7 +395,7 @@ public class Types {
     public boolean equals(Object o) {
       if (this == o) {
         return true;
-      } else if (o == null || getClass() != o.getClass()) {
+      } else if (!(o instanceof DecimalType)) {
         return false;
       }
 
@@ -427,6 +427,14 @@ public class Types {
 
     public static NestedField required(int id, String name, Type type, String doc) {
       return new NestedField(false, id, name, type, doc);
+    }
+
+    public static NestedField of(int id, boolean isOptional, String name, Type type) {
+      return new NestedField(isOptional, id, name, type, null);
+    }
+
+    public static NestedField of(int id, boolean isOptional, String name, Type type, String doc) {
+      return new NestedField(isOptional, id, name, type, doc);
     }
 
     private final boolean isOptional;
@@ -480,7 +488,7 @@ public class Types {
     public boolean equals(Object o) {
       if (this == o) {
         return true;
-      } else if (o == null || getClass() != o.getClass()) {
+      } else if (!(o instanceof NestedField)) {
         return false;
       }
 
@@ -581,7 +589,7 @@ public class Types {
     public boolean equals(Object o) {
       if (this == o) {
         return true;
-      } else if (o == null || getClass() != o.getClass()) {
+      } else if (!(o instanceof StructType)) {
         return false;
       }
 
@@ -603,37 +611,35 @@ public class Types {
 
     private Map<String, NestedField> lazyFieldsByName() {
       if (fieldsByName == null) {
-        indexFields();
+        ImmutableMap.Builder<String, NestedField> byNameBuilder = ImmutableMap.builder();
+        for (NestedField field : fields) {
+          byNameBuilder.put(field.name(), field);
+        }
+        fieldsByName = byNameBuilder.build();
       }
       return fieldsByName;
     }
 
     private Map<String, NestedField> lazyFieldsByLowerCaseName() {
       if (fieldsByLowerCaseName == null) {
-        indexFields();
+        ImmutableMap.Builder<String, NestedField> byLowerCaseNameBuilder = ImmutableMap.builder();
+        for (NestedField field : fields) {
+          byLowerCaseNameBuilder.put(field.name().toLowerCase(Locale.ROOT), field);
+        }
+        fieldsByLowerCaseName = byLowerCaseNameBuilder.build();
       }
       return fieldsByLowerCaseName;
     }
 
     private Map<Integer, NestedField> lazyFieldsById() {
       if (fieldsById == null) {
-        indexFields();
+        ImmutableMap.Builder<Integer, NestedField> byIdBuilder = ImmutableMap.builder();
+        for (NestedField field : fields) {
+          byIdBuilder.put(field.fieldId(), field);
+        }
+        this.fieldsById = byIdBuilder.build();
       }
       return fieldsById;
-    }
-
-    private void indexFields() {
-      ImmutableMap.Builder<String, NestedField> byNameBuilder = ImmutableMap.builder();
-      ImmutableMap.Builder<String, NestedField> byLowerCaseNameBuilder = ImmutableMap.builder();
-      ImmutableMap.Builder<Integer, NestedField> byIdBuilder = ImmutableMap.builder();
-      for (NestedField field : fields) {
-        byNameBuilder.put(field.name(), field);
-        byLowerCaseNameBuilder.put(field.name().toLowerCase(Locale.ROOT), field);
-        byIdBuilder.put(field.fieldId(), field);
-      }
-      this.fieldsByName = byNameBuilder.build();
-      this.fieldsByLowerCaseName = byLowerCaseNameBuilder.build();
-      this.fieldsById = byIdBuilder.build();
     }
   }
 
@@ -716,7 +722,7 @@ public class Types {
     public boolean equals(Object o) {
       if (this == o) {
         return true;
-      } else if (o == null || getClass() != o.getClass()) {
+      } else if (!(o instanceof ListType)) {
         return false;
       }
 
@@ -834,7 +840,7 @@ public class Types {
     public boolean equals(Object o) {
       if (this == o) {
         return true;
-      } else if (o == null || getClass() != o.getClass()) {
+      } else if (!(o instanceof MapType)) {
         return false;
       }
 

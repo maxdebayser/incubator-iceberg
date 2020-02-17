@@ -77,7 +77,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
   private final String commitUUID = UUID.randomUUID().toString();
   private final AtomicInteger attempt = new AtomicInteger(0);
   private final List<String> manifestLists = Lists.newArrayList();
-  private Long snapshotId = null;
+  private volatile Long snapshotId = null;
   private TableMetadata base = null;
   private boolean stageOnly = false;
   private Consumer<String> deleteFunc = defaultDelete;
@@ -139,7 +139,7 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
   @Override
   public Snapshot apply() {
-    this.base = ops.refresh();
+    this.base = refresh();
     Long parentSnapshotId = base.currentSnapshot() != null ?
         base.currentSnapshot().snapshotId() : null;
 
@@ -168,12 +168,12 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         throw new RuntimeIOException(e, "Failed to write manifest list file");
       }
 
-      return new BaseSnapshot(ops,
+      return new BaseSnapshot(ops.io(),
           snapshotId(), parentSnapshotId, System.currentTimeMillis(), operation(), summary(base),
           ops.io().newInputFile(manifestList.location()));
 
     } else {
-      return new BaseSnapshot(ops,
+      return new BaseSnapshot(ops.io(),
           snapshotId(), parentSnapshotId, System.currentTimeMillis(), operation(), summary(base),
           manifests);
     }
@@ -221,6 +221,15 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
     return builder.build();
   }
 
+  protected TableMetadata current() {
+    return base;
+  }
+
+  protected TableMetadata refresh() {
+    this.base = ops.refresh();
+    return base;
+  }
+
   @Override
   public void commit() {
     // this is always set to the latest commit attempt's snapshot id.
@@ -242,6 +251,12 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
               updated = base.addStagedSnapshot(newSnapshot);
             } else {
               updated = base.replaceCurrentSnapshot(newSnapshot);
+            }
+
+            if (updated == base) {
+              // do not commit if the metadata has not changed. for example, this may happen when setting the current
+              // snapshot to an ID that is already current. note that this check uses identity.
+              return;
             }
 
             // if the table UUID is missing, add it here. the UUID will be re-created each time this operation retries
@@ -302,18 +317,24 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
 
   protected long snapshotId() {
     if (snapshotId == null) {
-      this.snapshotId = ops.newSnapshotId();
+      synchronized (this) {
+        if (snapshotId == null) {
+          this.snapshotId = ops.newSnapshotId();
+        }
+      }
     }
     return snapshotId;
   }
 
   private static ManifestFile addMetadata(TableOperations ops, ManifestFile manifest) {
-    try (ManifestReader reader = ManifestReader.read(
-        ops.io().newInputFile(manifest.path()), ops.current().specsById())) {
+    try (ManifestReader reader = ManifestReader.read(manifest, ops.io(), ops.current().specsById())) {
       PartitionSummary stats = new PartitionSummary(ops.current().spec(manifest.partitionSpecId()));
       int addedFiles = 0;
+      long addedRows = 0L;
       int existingFiles = 0;
+      long existingRows = 0L;
       int deletedFiles = 0;
+      long deletedRows = 0L;
 
       Long snapshotId = null;
       long maxSnapshotId = Long.MIN_VALUE;
@@ -325,15 +346,18 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
         switch (entry.status()) {
           case ADDED:
             addedFiles += 1;
+            addedRows += entry.file().recordCount();
             if (snapshotId == null) {
               snapshotId = entry.snapshotId();
             }
             break;
           case EXISTING:
             existingFiles += 1;
+            existingRows += entry.file().recordCount();
             break;
           case DELETED:
             deletedFiles += 1;
+            deletedRows += entry.file().recordCount();
             if (snapshotId == null) {
               snapshotId = entry.snapshotId();
             }
@@ -349,7 +373,8 @@ abstract class SnapshotProducer<ThisT> implements SnapshotUpdate<ThisT> {
       }
 
       return new GenericManifestFile(manifest.path(), manifest.length(), manifest.partitionSpecId(),
-          snapshotId, addedFiles, existingFiles, deletedFiles, stats.summaries());
+          snapshotId, addedFiles, addedRows, existingFiles, existingRows, deletedFiles, deletedRows,
+          stats.summaries());
 
     } catch (IOException e) {
       throw new RuntimeIOException(e, "Failed to read manifest: %s", manifest.path());

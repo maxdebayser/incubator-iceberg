@@ -30,13 +30,18 @@ import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.encryption.EncryptionManager;
+import org.apache.iceberg.hadoop.HadoopFileIO;
 import org.apache.iceberg.hadoop.HadoopTables;
 import org.apache.iceberg.hive.HiveCatalog;
 import org.apache.iceberg.hive.HiveCatalogs;
+import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.transforms.Transform;
 import org.apache.iceberg.transforms.UnknownTransform;
 import org.apache.iceberg.types.CheckCompatibility;
+import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.execution.streaming.StreamExecution;
@@ -51,10 +56,12 @@ import org.apache.spark.sql.sources.v2.writer.DataSourceWriter;
 import org.apache.spark.sql.sources.v2.writer.streaming.StreamWriter;
 import org.apache.spark.sql.streaming.OutputMode;
 import org.apache.spark.sql.types.StructType;
+import org.apache.spark.util.SerializableConfiguration;
 
 public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, DataSourceRegister, StreamWriteSupport {
 
   private SparkSession lazySpark = null;
+  private JavaSparkContext lazySparkContext = null;
   private Configuration lazyConf = null;
 
   @Override
@@ -64,11 +71,26 @@ public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, D
 
   @Override
   public DataSourceReader createReader(DataSourceOptions options) {
+    return createReader(null, options);
+  }
+
+  @Override
+  public DataSourceReader createReader(StructType readSchema, DataSourceOptions options) {
     Configuration conf = new Configuration(lazyBaseConf());
     Table table = getTableAndResolveHadoopConfiguration(options, conf);
-    String caseSensitive = lazySparkSession().conf().get("spark.sql.caseSensitive", "true");
+    String caseSensitive = lazySparkSession().conf().get("spark.sql.caseSensitive");
 
-    return new Reader(table, Boolean.valueOf(caseSensitive), options);
+    Broadcast<FileIO> io = lazySparkContext().broadcast(fileIO(table));
+    Broadcast<EncryptionManager> encryptionManager = lazySparkContext().broadcast(table.encryption());
+
+    Reader reader = new Reader(table, io, encryptionManager, Boolean.parseBoolean(caseSensitive), options);
+    if (readSchema != null) {
+      // convert() will fail if readSchema contains fields not in table.schema()
+      SparkSchemaUtil.convert(table.schema(), readSchema);
+      reader.pruneColumns(readSchema);
+    }
+
+    return reader;
   }
 
   @Override
@@ -78,11 +100,17 @@ public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, D
         "Save mode %s is not supported", mode);
     Configuration conf = new Configuration(lazyBaseConf());
     Table table = getTableAndResolveHadoopConfiguration(options, conf);
-    validateWriteSchema(table.schema(), dsStruct);
+    Schema dsSchema = SparkSchemaUtil.convert(table.schema(), dsStruct);
+    validateWriteSchema(table.schema(), dsSchema, checkNullability(options), checkOrdering(options));
     validatePartitionTransforms(table.spec());
     String appId = lazySparkSession().sparkContext().applicationId();
     String wapId = lazySparkSession().conf().get("spark.wap.id", null);
-    return Optional.of(new Writer(table, options, mode == SaveMode.Overwrite, appId, wapId));
+    boolean replacePartitions = mode == SaveMode.Overwrite;
+
+    Broadcast<FileIO> io = lazySparkContext().broadcast(fileIO(table));
+    Broadcast<EncryptionManager> encryptionManager = lazySparkContext().broadcast(table.encryption());
+
+    return Optional.of(new Writer(table, io, encryptionManager, options, replacePartitions, appId, wapId, dsSchema));
   }
 
   @Override
@@ -93,13 +121,18 @@ public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, D
         "Output mode %s is not supported", mode);
     Configuration conf = new Configuration(lazyBaseConf());
     Table table = getTableAndResolveHadoopConfiguration(options, conf);
-    validateWriteSchema(table.schema(), dsStruct);
+    Schema dsSchema = SparkSchemaUtil.convert(table.schema(), dsStruct);
+    validateWriteSchema(table.schema(), dsSchema, checkNullability(options), checkOrdering(options));
     validatePartitionTransforms(table.spec());
     // Spark 2.4.x passes runId to createStreamWriter instead of real queryId,
     // so we fetch it directly from sparkContext to make writes idempotent
     String queryId = lazySparkSession().sparkContext().getLocalProperty(StreamExecution.QUERY_ID_KEY());
     String appId = lazySparkSession().sparkContext().applicationId();
-    return new StreamingWriter(table, options, queryId, mode, appId);
+
+    Broadcast<FileIO> io = lazySparkContext().broadcast(fileIO(table));
+    Broadcast<EncryptionManager> encryptionManager = lazySparkContext().broadcast(table.encryption());
+
+    return new StreamingWriter(table, io, encryptionManager, options, queryId, mode, appId, dsSchema);
   }
 
   protected Table findTable(DataSourceOptions options, Configuration conf) {
@@ -123,9 +156,16 @@ public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, D
     return lazySpark;
   }
 
+  private JavaSparkContext lazySparkContext() {
+    if (lazySparkContext == null) {
+      this.lazySparkContext = new JavaSparkContext(lazySparkSession().sparkContext());
+    }
+    return lazySparkContext;
+  }
+
   private Configuration lazyBaseConf() {
     if (lazyConf == null) {
-      this.lazyConf = lazySparkSession().sparkContext().hadoopConfiguration();
+      this.lazyConf = lazySparkSession().sessionState().newHadoopConf();
     }
     return lazyConf;
   }
@@ -149,9 +189,14 @@ public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, D
         .forEach(key -> baseConf.set(key.replaceFirst("hadoop.", ""), options.get(key)));
   }
 
-  private void validateWriteSchema(Schema tableSchema, StructType dsStruct) {
-    Schema dsSchema = SparkSchemaUtil.convert(tableSchema, dsStruct);
-    List<String> errors = CheckCompatibility.writeCompatibilityErrors(tableSchema, dsSchema);
+  private void validateWriteSchema(
+          Schema tableSchema, Schema dsSchema, Boolean checkNullability, Boolean checkOrdering) {
+    List<String> errors;
+    if (checkNullability) {
+      errors = CheckCompatibility.writeCompatibilityErrors(tableSchema, dsSchema, checkOrdering);
+    } else {
+      errors = CheckCompatibility.typeCompatibilityErrors(tableSchema, dsSchema, checkOrdering);
+    }
     if (!errors.isEmpty()) {
       StringBuilder sb = new StringBuilder();
       sb.append("Cannot write incompatible dataset to table with schema:\n")
@@ -174,6 +219,30 @@ public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, D
 
       throw new UnsupportedOperationException(
           String.format("Cannot write using unsupported transforms: %s", unsupported));
+    }
+  }
+
+  private boolean checkNullability(DataSourceOptions options) {
+    boolean sparkCheckNullability = Boolean.parseBoolean(lazySpark.conf()
+        .get("spark.sql.iceberg.check-nullability", "true"));
+    boolean dataFrameCheckNullability = options.getBoolean("check-nullability", true);
+    return sparkCheckNullability && dataFrameCheckNullability;
+  }
+
+  private boolean checkOrdering(DataSourceOptions options) {
+    boolean sparkCheckOrdering = Boolean.parseBoolean(lazySpark.conf()
+            .get("spark.sql.iceberg.check-ordering", "true"));
+    boolean dataFrameCheckOrdering = options.getBoolean("check-ordering", true);
+    return sparkCheckOrdering && dataFrameCheckOrdering;
+  }
+
+  private FileIO fileIO(Table table) {
+    if (table.io() instanceof HadoopFileIO) {
+      // we need to use Spark's SerializableConfiguration to avoid issues with Kryo serialization
+      SerializableConfiguration conf = new SerializableConfiguration(((HadoopFileIO) table.io()).conf());
+      return new HadoopFileIO(conf::value);
+    } else {
+      return table.io();
     }
   }
 }

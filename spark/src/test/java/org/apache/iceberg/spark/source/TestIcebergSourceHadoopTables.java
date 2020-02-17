@@ -32,17 +32,20 @@ import org.apache.iceberg.ManifestFile;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.avro.Avro;
 import org.apache.iceberg.avro.AvroSchemaUtil;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.hadoop.HadoopTables;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.InputFile;
+import org.apache.iceberg.spark.SparkTableUtil;
 import org.apache.iceberg.spark.data.TestHelpers;
 import org.apache.iceberg.types.Types;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.catalyst.TableIdentifier;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
@@ -166,6 +169,58 @@ public class TestIcebergSourceHadoopTables {
     Assert.assertEquals("Files table should have one row", 1, expected.size());
     Assert.assertEquals("Actual results should have one row", 1, actual.size());
     TestHelpers.assertEqualsSafe(filesTable.schema().asStruct(), expected.get(0), actual.get(0));
+  }
+
+  @Test
+  public void testFilesTableWithSnapshotIdInheritance() throws Exception {
+    Table table = TABLES.create(SCHEMA, PartitionSpec.builderFor(SCHEMA).identity("id").build(), tableLocation);
+
+    table.updateProperties()
+        .set(TableProperties.SNAPSHOT_ID_INHERITANCE_ENABLED, "true")
+        .commit();
+
+    Table entriesTable = TABLES.load(tableLocation + "#entries");
+    Table filesTable = TABLES.load(tableLocation + "#files");
+
+    List<SimpleRecord> records = Lists.newArrayList(
+        new SimpleRecord(1, "a"),
+        new SimpleRecord(2, "b")
+     );
+
+    try {
+      Dataset<Row> inputDF = spark.createDataFrame(records, SimpleRecord.class);
+      inputDF.select("id", "data").write()
+          .format("parquet")
+          .mode("append")
+          .partitionBy("id")
+          .saveAsTable("parquet_table");
+
+      String stagingLocation = table.location() + "/metadata";
+      SparkTableUtil.importSparkTable(spark, new TableIdentifier("parquet_table"), table, stagingLocation);
+
+      List<Row> actual = spark.read()
+          .format("iceberg")
+          .load(tableLocation + "#files")
+          .collectAsList();
+
+      List<GenericData.Record> expected = Lists.newArrayList();
+      for (ManifestFile manifest : table.currentSnapshot().manifests()) {
+        InputFile in = table.io().newInputFile(manifest.path());
+        try (CloseableIterable<GenericData.Record> rows = Avro.read(in).project(entriesTable.schema()).build()) {
+          for (GenericData.Record record : rows) {
+            expected.add((GenericData.Record) record.get("data_file"));
+          }
+        }
+      }
+
+      Assert.assertEquals("Files table should have one row", 2, expected.size());
+      Assert.assertEquals("Actual results should have one row", 2, actual.size());
+      TestHelpers.assertEqualsSafe(filesTable.schema().asStruct(), expected.get(0), actual.get(0));
+      TestHelpers.assertEqualsSafe(filesTable.schema().asStruct(), expected.get(1), actual.get(1));
+
+    } finally {
+      spark.sql("DROP TABLE parquet_table");
+    }
   }
 
   @Test
@@ -400,5 +455,67 @@ public class TestIcebergSourceHadoopTables {
 
     Assert.assertEquals("Manifests table should have one manifest row", 1, actual.size());
     TestHelpers.assertEqualsSafe(manifestTable.schema().asStruct(), expected.get(0), actual.get(0));
+  }
+
+  @Test
+  public void testPartitionsTable() {
+    Table table = TABLES.create(SCHEMA, PartitionSpec.builderFor(SCHEMA).identity("id").build(), tableLocation);
+    Table partitionsTable = TABLES.load(tableLocation + "#partitions");
+
+    Dataset<Row> df1 = spark.createDataFrame(Lists.newArrayList(new SimpleRecord(1, "a")), SimpleRecord.class);
+    Dataset<Row> df2 = spark.createDataFrame(Lists.newArrayList(new SimpleRecord(2, "b")), SimpleRecord.class);
+
+    df1.select("id", "data").write()
+        .format("iceberg")
+        .mode("append")
+        .save(tableLocation);
+
+    table.refresh();
+    long firstCommitId = table.currentSnapshot().snapshotId();
+
+    // add a second file
+    df2.select("id", "data").write()
+        .format("iceberg")
+        .mode("append")
+        .save(tableLocation);
+
+    List<Row> actual = spark.read()
+        .format("iceberg")
+        .load(tableLocation + "#partitions")
+        .orderBy("partition.id")
+        .collectAsList();
+
+    GenericRecordBuilder builder = new GenericRecordBuilder(AvroSchemaUtil.convert(
+        partitionsTable.schema(), "partitions"));
+    GenericRecordBuilder partitionBuilder = new GenericRecordBuilder(AvroSchemaUtil.convert(
+        partitionsTable.schema().findType("partition").asStructType(), "partition"));
+    List<GenericData.Record> expected = Lists.newArrayList();
+    expected.add(builder
+        .set("partition", partitionBuilder.set("id", 1).build())
+        .set("record_count", 1L)
+        .set("file_count", 1)
+        .build());
+    expected.add(builder
+        .set("partition", partitionBuilder.set("id", 2).build())
+        .set("record_count", 1L)
+        .set("file_count", 1)
+        .build());
+
+    Assert.assertEquals("Partitions table should have two rows", 2, expected.size());
+    Assert.assertEquals("Actual results should have two rows", 2, actual.size());
+    for (int i = 0; i < 2; i += 1) {
+      TestHelpers.assertEqualsSafe(partitionsTable.schema().asStruct(), expected.get(i), actual.get(i));
+    }
+
+    // check time travel
+    List<Row> actualAfterFirstCommit = spark.read()
+        .format("iceberg")
+        .option("snapshot-id", String.valueOf(firstCommitId))
+        .load(tableLocation + "#partitions")
+        .orderBy("partition.id")
+        .collectAsList();
+
+    Assert.assertEquals("Actual results should have one row", 1, actualAfterFirstCommit.size());
+    TestHelpers.assertEqualsSafe(partitionsTable.schema().asStruct(), expected.get(0), actualAfterFirstCommit.get(0));
   }
 }
