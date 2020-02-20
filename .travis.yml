@@ -23,7 +23,7 @@ dist: trusty
 matrix:
   include:
   - language: java
-    name: java
+    name: java8
     jdk: openjdk8
     before_cache:
       - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
@@ -34,7 +34,7 @@ matrix:
         - $HOME/.gradle/wrapper/
 
   - language: java
-    name: java
+    name: java11
     jdk: openjdk11
     before_cache:
       - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
