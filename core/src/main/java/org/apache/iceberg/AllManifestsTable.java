@@ -57,12 +57,10 @@ public class AllManifestsTable extends BaseMetadataTable {
 
   private final TableOperations ops;
   private final Table table;
-  private final PartitionSpec spec;
 
   public AllManifestsTable(TableOperations ops, Table table) {
     this.ops = ops;
     this.table = table;
-    this.spec = table.spec();
   }
 
   @Override
@@ -91,7 +89,6 @@ public class AllManifestsTable extends BaseMetadataTable {
   }
 
   public static class AllManifestsTableScan extends BaseTableScan {
-    private static final long TARGET_SPLIT_SIZE = 32 * 1024 * 1024; // 32 MB
 
     AllManifestsTableScan(TableOperations ops, Table table, Schema fileSchema) {
       super(ops, table, fileSchema);
@@ -125,7 +122,8 @@ public class AllManifestsTable extends BaseMetadataTable {
 
     @Override
     protected long targetSplitSize(TableOperations ops) {
-      return TARGET_SPLIT_SIZE;
+      return ops.current().propertyAsLong(
+          TableProperties.METADATA_SPLIT_SIZE, TableProperties.METADATA_SPLIT_SIZE_DEFAULT);
     }
 
     @Override

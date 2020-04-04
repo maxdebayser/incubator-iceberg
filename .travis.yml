@@ -18,13 +18,13 @@
 #
 
 sudo: false
-dist: trusty
+dist: bionic
 
 matrix:
   include:
   - language: java
-    name: java8
-    jdk: openjdk8
+    name: java11
+    jdk: openjdk11
     before_cache:
       - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
       - rm -fr $HOME/.gradle/caches/*/plugin-resolution/
@@ -32,10 +32,9 @@ matrix:
       directories:
         - $HOME/.gradle/caches/
         - $HOME/.gradle/wrapper/
-
   - language: java
-    name: java11
-    jdk: openjdk11
+    name: java8
+    jdk: openjdk8
     before_cache:
       - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
       - rm -fr $HOME/.gradle/caches/*/plugin-resolution/

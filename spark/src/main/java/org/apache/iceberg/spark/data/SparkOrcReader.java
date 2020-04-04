@@ -56,10 +56,12 @@ public class SparkOrcReader implements OrcValueReader<InternalRow> {
   private static final int INITIAL_SIZE = 128 * 1024;
   private final List<TypeDescription> columns;
   private final Converter[] converters;
+  private final UnsafeRowWriter rowWriter;
 
   public SparkOrcReader(TypeDescription readOrcSchema) {
     columns = readOrcSchema.getChildren();
     converters = buildConverters();
+    rowWriter = new UnsafeRowWriter(columns.size(), INITIAL_SIZE);
   }
 
   private Converter[] buildConverters() {
@@ -72,7 +74,6 @@ public class SparkOrcReader implements OrcValueReader<InternalRow> {
 
   @Override
   public InternalRow read(VectorizedRowBatch batch, int row) {
-    final UnsafeRowWriter rowWriter = new UnsafeRowWriter(columns.size(), INITIAL_SIZE);
     rowWriter.reset();
     rowWriter.zeroOutNullBytes();
     for (int c = 0; c < batch.cols.length; ++c) {
@@ -145,8 +146,10 @@ public class SparkOrcReader implements OrcValueReader<InternalRow> {
         return row.getDecimal(ord, schema.getPrecision(), schema.getScale()).toString();
       case DATE:
         return "\"" + new DateWritable(row.getInt(ord)) + "\"";
-      case TIMESTAMP:
-        return "\"" + new Timestamp(row.getLong(ord)) + "\"";
+      case TIMESTAMP_INSTANT:
+        Timestamp ts = new Timestamp((row.getLong(ord) / 1_000_000) * 1_000); // initialize with seconds
+        ts.setNanos((int) (row.getLong(ord) % 1_000_000) * 1_000); // add the rest (millis to nanos)
+        return "\"" + ts + "\"";
       case STRUCT:
         return rowToString(row.getStruct(ord, schema.getChildren().size()), schema);
       case LIST: {
@@ -380,7 +383,7 @@ public class SparkOrcReader implements OrcValueReader<InternalRow> {
     }
   }
 
-  private static class TimestampConverter implements Converter {
+  private static class TimestampTzConverter implements Converter {
 
     private long convert(TimestampColumnVector vector, int row) {
       // compute microseconds past 1970.
@@ -692,8 +695,8 @@ public class SparkOrcReader implements OrcValueReader<InternalRow> {
         return new FloatConverter();
       case DOUBLE:
         return new DoubleConverter();
-      case TIMESTAMP:
-        return new TimestampConverter();
+      case TIMESTAMP_INSTANT:
+        return new TimestampTzConverter();
       case DECIMAL:
         if (schema.getPrecision() <= Decimal.MAX_LONG_DIGITS()) {
           return new Decimal18Converter(schema.getPrecision(), schema.getScale());
