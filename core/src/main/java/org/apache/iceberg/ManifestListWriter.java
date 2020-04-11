@@ -19,6 +19,7 @@
 
 package org.apache.iceberg;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
 import java.io.IOException;
 import java.util.Iterator;
@@ -28,10 +29,26 @@ import org.apache.iceberg.exceptions.RuntimeIOException;
 import org.apache.iceberg.io.FileAppender;
 import org.apache.iceberg.io.OutputFile;
 
-class ManifestListWriter implements FileAppender<ManifestFile> {
+abstract class ManifestListWriter implements FileAppender<ManifestFile> {
+  static ManifestListWriter write(int formatVersion, OutputFile manifestListFile,
+                                  long snapshotId, Long parentSnapshotId) {
+    Preconditions.checkArgument(formatVersion == 1, "Sequence number is required for format v%s", formatVersion);
+    return new V1Writer(manifestListFile, snapshotId, parentSnapshotId);
+  }
+
+  static ManifestListWriter write(int formatVersion, OutputFile manifestListFile,
+                                  long snapshotId, Long parentSnapshotId, long sequenceNumber) {
+    if (formatVersion == 1) {
+      Preconditions.checkArgument(sequenceNumber == TableMetadata.INITIAL_SEQUENCE_NUMBER,
+          "Invalid sequence number for v1 manifest list: %s", sequenceNumber);
+      return new V1Writer(manifestListFile, snapshotId, parentSnapshotId);
+    }
+    throw new UnsupportedOperationException("Cannot write manifest list for table version: " + formatVersion);
+  }
+
   private final FileAppender<ManifestFile> writer;
 
-  ManifestListWriter(OutputFile snapshotFile, long snapshotId, Long parentSnapshotId) {
+  private ManifestListWriter(OutputFile snapshotFile, long snapshotId, Long parentSnapshotId) {
     this.writer = newAppender(snapshotFile, ImmutableMap.of(
         "snapshot-id", String.valueOf(snapshotId),
         "parent-snapshot-id", String.valueOf(parentSnapshotId)));
@@ -78,6 +95,12 @@ class ManifestListWriter implements FileAppender<ManifestFile> {
 
     } catch (IOException e) {
       throw new RuntimeIOException(e, "Failed to create snapshot list writer for path: " + file);
+    }
+  }
+
+  static class V1Writer extends ManifestListWriter {
+    private V1Writer(OutputFile snapshotFile, long snapshotId, Long parentSnapshotId) {
+      super(snapshotFile, snapshotId, parentSnapshotId);
     }
   }
 }
