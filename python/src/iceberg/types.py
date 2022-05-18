@@ -203,7 +203,8 @@ class StructType(IcebergType):
         cls._instances[fields] = cls._instances.get(fields) or object.__new__(cls)
         return cls._instances[fields]
 
-    def __init__(self, *fields: NestedField, **kwargs):  # pylint: disable=super-init-not-called
+    def __init__(self, *fields: NestedField, **kwargs):
+        super().__init__()
         if not fields and "fields" in kwargs:
             fields = kwargs["fields"]
         object.__setattr__(self, "fields", fields)
