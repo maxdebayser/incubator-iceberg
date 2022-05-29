@@ -20,7 +20,7 @@ generate-openapi:
 	datamodel-codegen \
 		--target-python-version 3.8 \
 		--use-schema-description \
-		--enum-field-as-literal all \
+		--enum-field-as-literal one \
 		--field-constraints \
 		--input ../open-api/rest-catalog-open-api.yaml \
 		--disable-timestamp \

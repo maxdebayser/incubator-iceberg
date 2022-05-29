@@ -136,13 +136,13 @@ paths:
         This endpoint is used for three purposes -
 
         1. To exchange client credentials (client ID and secret) for an access token
-           This uses the client credentials flow.
+        This uses the client credentials flow.
 
         2. To exchange a client token and an identity token for a more specific access token
-           This uses the token exchange flow.
+        This uses the token exchange flow.
 
         3. To exchange an access token for one with the same claims and a refreshed expiration period
-           This uses the token exchange flow.
+        This uses the token exchange flow.
 
 
         For example, a catalog client may be configured with client credentials from the OAuth2
@@ -924,11 +924,13 @@ components:
     StructType:
       type: object
       required:
+        - type
         - fields
       properties:
         type:
           type: string
           enum: ["struct"]
+          default: "struct"
         fields:
           type: array
           items:
@@ -977,7 +979,7 @@ components:
           $ref: '#/components/schemas/Type'
 
     Type:
-      anyOf:
+      oneOf:
         - $ref: '#/components/schemas/PrimitiveType'
         - $ref: '#/components/schemas/StructType'
         - $ref: '#/components/schemas/ListType'
@@ -1410,19 +1412,19 @@ components:
         Assertions from the client that must be valid for the commit to succeed. Assertions are identified by `type` -
 
         - `assert-create` - the table must not already exist; used for create transactions
-        
+
         - `assert-table-uuid` - the table UUID must match the requirement's `uuid`
 
         - `assert-ref-snapshot-id` - the table branch or tag identified by the requirement's `ref` must reference the requirement's `snapshot-id`; if `snapshot-id` is `null` or missing, the ref must not already exist
-        
+
         - `assert-last-assigned-field-id` - the table's last assigned column id must match the requirement's `last-assigned-field-id`
-        
+
         - `assert-current-schema-id` - the table's current schema id must match the requirement's `current-schema-id`
-        
+
         - `assert-last-assigned-partition-id` - the table's last assigned partition id must match the requirement's `last-assigned-partition-id`
-        
+
         - `assert-default-spec-id` - the table's default spec id must match the requirement's `default-spec-id`
-        
+
         - `assert-default-sort-order-id` - the table's default sort order id must match the requirement's `default-sort-order-id`
       type: object
       required:

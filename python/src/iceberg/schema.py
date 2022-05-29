@@ -23,6 +23,10 @@ from dataclasses import dataclass
 from functools import singledispatch
 from typing import Any, Dict, Generic, Iterable, List, Optional, TypeVar
 
+from pydantic import Field
+
+from iceberg.openapi import rest_catalog
+
 from iceberg.files import StructProtocol
 from iceberg.types import (
     IcebergType,
@@ -36,7 +40,7 @@ from iceberg.types import (
 T = TypeVar("T")
 
 
-class Schema:
+class Schema(rest_catalog.Schema):
     """A table Schema
 
     Example:
@@ -44,15 +48,23 @@ class Schema:
         >>> from iceberg import types
     """
 
-    def __init__(self, *columns: Iterable[NestedField], schema_id: int, identifier_field_ids: Optional[List[int]] = None):
-        self._struct = StructType(*columns)  # type: ignore
-        self._schema_id = schema_id
-        self._identifier_field_ids = identifier_field_ids or []
+    # Should be accessed through self._lazy_name_to_id_lower()
+    _name_to_id_lower: Dict[str, int] = Field(default={}, init=False)
+    # Should be accessed through self._lazy_id_to_field()
+    _id_to_field: Dict[int, NestedField] = Field(default={}, init=False)
+    # Should be accessed through self._lazy_id_to_name()
+    _id_to_name: Dict[int, str] = Field(default={}, init=False)
+    # Should be accessed through self._lazy_id_to_accessor()
+    _id_to_accessor: Dict[int, Accessor] = Field(default={}, init=False)
+
+    _struct = Field(init=False)
+
+    _identifier_field_ids = Field(default=[], init=False)
+
+    def __init__(self, **data):
         self._name_to_id: Dict[str, int] = index_by_name(self)
-        self._name_to_id_lower: Dict[str, int] = {}  # Should be accessed through self._lazy_name_to_id_lower()
-        self._id_to_field: Dict[int, NestedField] = {}  # Should be accessed through self._lazy_id_to_field()
-        self._id_to_name: Dict[int, str] = {}  # Should be accessed through self._lazy_id_to_name()
-        self._id_to_accessor: Dict[int, Accessor] = {}  # Should be accessed through self._lazy_id_to_accessor()
+        self._struct = StructType(**data['fields'])
+        super().__init__(**data)
 
     def __str__(self):
         return "table {\n" + "\n".join(["  " + str(field) for field in self.columns]) + "\n}"
@@ -63,14 +75,14 @@ class Schema:
         )
 
     @property
-    def columns(self) -> Iterable[NestedField]:
+    def columns(self) -> List[NestedField]:
         """A list of the top-level fields in the underlying struct"""
         return self._struct.fields
 
     @property
     def schema_id(self) -> int:
         """The ID of this Schema"""
-        return self._schema_id
+        return self.schema_id
 
     @property
     def identifier_field_ids(self) -> List[int]:
@@ -133,7 +145,7 @@ class Schema:
             field_id = self._name_to_id.get(name_or_id)
         else:
             field_id = self._lazy_name_to_id_lower().get(name_or_id.lower())
-        return self._lazy_id_to_field().get(field_id)  # type: ignore
+        return self._lazy_id_to_field().get(field_id)
 
     def find_type(self, name_or_id: str | int, case_sensitive: bool = True) -> IcebergType:
         """Find a field type using a field name or field ID
@@ -146,7 +158,7 @@ class Schema:
             NestedField: The type of the matched NestedField
         """
         field = self.find_field(name_or_id=name_or_id, case_sensitive=case_sensitive)
-        return field.field_type
+        return field.type
 
     def find_column_name(self, column_id: int) -> str:
         """Find a column name given a column ID

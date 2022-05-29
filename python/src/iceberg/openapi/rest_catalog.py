@@ -176,11 +176,18 @@ class SortOrder(BaseModel):
     fields: List[SortField]
 
 
+class Operation(Enum):
+    append = 'append'
+    replace = 'replace'
+    overwrite = 'overwrite'
+    delete = 'delete'
+
+
 class Summary(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
-    operation: Literal['append', 'replace', 'overwrite', 'delete']
+    operation: Operation
     additionalProperties: Optional[str] = None
 
 
@@ -199,11 +206,16 @@ class Snapshot(BaseModel):
     summary: Summary
 
 
+class Type1(Enum):
+    tag = 'tag'
+    branch = 'branch'
+
+
 class SnapshotReference(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
-    type: Literal['tag', 'branch']
+    type: Type1
     snapshot_id: int = Field(..., alias='snapshot-id')
     max_ref_age_ms: Optional[int] = Field(None, alias='max-ref-age-ms')
     max_snapshot_age_ms: Optional[int] = Field(None, alias='max-snapshot-age-ms')
@@ -248,26 +260,28 @@ class MetadataLog(BaseModel):
     __root__: List[MetadataLogItem]
 
 
+class Action(Enum):
+    upgrade_format_version = 'upgrade-format-version'
+    add_schema = 'add-schema'
+    set_current_schema = 'set-current-schema'
+    add_spec = 'add-spec'
+    set_default_spec = 'set-default-spec'
+    add_sort_order = 'add-sort-order'
+    set_default_sort_order = 'set-default-sort-order'
+    add_snapshot = 'add-snapshot'
+    set_snapshot_ref = 'set-snapshot-ref'
+    remove_snapshots = 'remove-snapshots'
+    remove_snapshot_ref = 'remove-snapshot-ref'
+    set_location = 'set-location'
+    set_properties = 'set-properties'
+    remove_properties = 'remove-properties'
+
+
 class BaseUpdate(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
-    action: Literal[
-        'upgrade-format-version',
-        'add-schema',
-        'set-current-schema',
-        'add-spec',
-        'set-default-spec',
-        'add-sort-order',
-        'set-default-sort-order',
-        'add-snapshot',
-        'set-snapshot-ref',
-        'remove-snapshots',
-        'remove-snapshot-ref',
-        'set-location',
-        'set-properties',
-        'remove-properties',
-    ]
+    action: Action
 
 
 class UpgradeFormatVersionUpdate(BaseUpdate):
@@ -373,6 +387,17 @@ class RemovePropertiesUpdate(BaseUpdate):
     removals: List[str]
 
 
+class Requirement(Enum):
+    assert_create = 'assert-create'
+    assert_table_uuid = 'assert-table-uuid'
+    assert_ref_snapshot_id = 'assert-ref-snapshot-id'
+    assert_last_assigned_field_id = 'assert-last-assigned-field-id'
+    assert_current_schema_id = 'assert-current-schema-id'
+    assert_last_assigned_partition_id = 'assert-last-assigned-partition-id'
+    assert_default_spec_id = 'assert-default-spec-id'
+    assert_default_sort_order_id = 'assert-default-sort-order-id'
+
+
 class TableRequirement(BaseModel):
     """
         Assertions from the client that must be valid for the commit to succeed. Assertions are identified by `type` -
@@ -389,16 +414,7 @@ class TableRequirement(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
-    requirement: Literal[
-        'assert-create',
-        'assert-table-uuid',
-        'assert-ref-snapshot-id',
-        'assert-last-assigned-field-id',
-        'assert-current-schema-id',
-        'assert-last-assigned-partition-id',
-        'assert-default-spec-id',
-        'assert-default-sort-order-id',
-    ]
+    requirement: Requirement
     ref: Optional[str] = None
     uuid: Optional[str] = None
     snapshot_id: Optional[int] = Field(None, alias='snapshot-id')
@@ -519,7 +535,7 @@ class StructType(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
-    type: Optional[Literal['struct']] = None
+    type: Literal['struct']
     fields: List[StructField]
 
 
