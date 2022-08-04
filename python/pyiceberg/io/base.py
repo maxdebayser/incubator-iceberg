@@ -102,7 +102,7 @@ class InputFile(ABC):
         """
 
     @abstractmethod
-    def open(self) -> InputStream:
+    def __enter__(self) -> InputStream:
         """This method should return an object that matches the InputStream protocol
 
         Returns:
@@ -184,6 +184,17 @@ class FileIO(ABC):
 
         Args:
             location(str): A URI or a path to a local file
+        """
+
+    @abstractmethod
+    def mkdir(self, location: Union[str, InputFile, OutputFile]) -> None:
+        """Creates the directory (including parent directories)
+
+        Args:
+            location: The path to the directory
+
+        Raises:
+            PermissionError: If the file at location cannot be accessed due to a permission error
         """
 
     @abstractmethod

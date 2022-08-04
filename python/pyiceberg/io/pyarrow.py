@@ -98,7 +98,7 @@ class PyArrowFile(InputFile, OutputFile):
         except FileNotFoundError:
             return False
 
-    def open(self) -> InputStream:
+    def __enter__(self) -> InputStream:
         """Opens the location using a PyArrow FileSystem inferred from the location
 
         Returns:
@@ -122,6 +122,9 @@ class PyArrowFile(InputFile, OutputFile):
                 raise PermissionError(f"Cannot open file, access denied: {self.location}") from e
             raise  # pragma: no cover - If some other kind of OSError, raise the raw error
         return input_file
+
+    def __exit__(self, type, value, traceback):
+        pass
 
     def create(self, overwrite: bool = False) -> OutputStream:
         """Creates a writable pyarrow.lib.NativeFile for this PyArrowFile's location
@@ -186,6 +189,16 @@ class PyArrowFileIO(FileIO):
             PyArrowFile: A PyArrowFile instance for the given location
         """
         return PyArrowFile(location)
+
+    def mkdir(self, location: str):
+        """Creates a directory"""
+        str_path = location.location if isinstance(location, (InputFile, OutputFile)) else location
+        filesystem, path = FileSystem.from_uri(str_path)  # Infer the proper filesystem
+
+        try:
+            filesystem.mkdir(path)
+        except PermissionError:
+            raise
 
     def delete(self, location: Union[str, InputFile, OutputFile]) -> None:
         """Delete the file at the given location

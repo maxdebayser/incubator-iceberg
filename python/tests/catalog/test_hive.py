@@ -32,7 +32,7 @@ from hive_metastore.ttypes import (
 from hive_metastore.ttypes import Table as HiveTable
 
 from pyiceberg.catalog.base import PropertiesUpdateSummary
-from pyiceberg.catalog.hive import HiveCatalog
+from pyiceberg.catalog.hive import HiveCatalog, _construct_hive_storage_descriptor
 from pyiceberg.exceptions import (
     NamespaceAlreadyExistsError,
     NamespaceNotEmptyError,
@@ -444,3 +444,67 @@ def test_update_namespace_properties_overlap():
         catalog.update_namespace_properties(("table",), removals=set("a"), updates={"a": "b"})
 
     assert "Updates and deletes have an overlap: {'a'}" in str(exc_info.value)
+
+
+def test_construct_hive_storage_descriptor_simple(table_schema_simple: Schema):
+    descriptor = _construct_hive_storage_descriptor(table_schema_simple, "s3://")
+    assert descriptor == StorageDescriptor(
+        cols=[
+            FieldSchema(name="foo", type="string", comment=None),
+            FieldSchema(name="bar", type="int", comment=None),
+            FieldSchema(name="baz", type="boolean", comment=None),
+        ],
+        location="s3://",
+        inputFormat="org.apache.hadoop.mapred.FileInputFormat",
+        outputFormat="org.apache.hadoop.mapred.FileOutputFormat",
+        compressed=None,
+        numBuckets=None,
+        serdeInfo=SerDeInfo(
+            name=None,
+            serializationLib="org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+            parameters=None,
+            description=None,
+            serializerClass=None,
+            deserializerClass=None,
+            serdeType=None,
+        ),
+        bucketCols=None,
+        sortCols=None,
+        parameters=None,
+        skewedInfo=None,
+        storedAsSubDirectories=None,
+    )
+
+
+def test_construct_hive_storage_descriptor_nested(table_schema_nested: Schema):
+    descriptor = _construct_hive_storage_descriptor(table_schema_nested, "s3://")
+    assert descriptor == StorageDescriptor(
+        cols=[
+            FieldSchema(name="foo", type="string", comment=None),
+            FieldSchema(name="bar", type="int", comment=None),
+            FieldSchema(name="baz", type="boolean", comment=None),
+            FieldSchema(name="qux", type="array<string>", comment=None),
+            FieldSchema(name="quux", type="map<string, map<string, int>>", comment=None),
+            FieldSchema(name="location", type="array<struct<latitude: float, longitude: float>>", comment=None),
+            FieldSchema(name="person", type="struct<name: string, age: int>", comment=None),
+        ],
+        location="s3://",
+        inputFormat="org.apache.hadoop.mapred.FileInputFormat",
+        outputFormat="org.apache.hadoop.mapred.FileOutputFormat",
+        compressed=None,
+        numBuckets=None,
+        serdeInfo=SerDeInfo(
+            name=None,
+            serializationLib="org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+            parameters=None,
+            description=None,
+            serializerClass=None,
+            deserializerClass=None,
+            serdeType=None,
+        ),
+        bucketCols=None,
+        sortCols=None,
+        parameters=None,
+        skewedInfo=None,
+        storedAsSubDirectories=None,
+    )
