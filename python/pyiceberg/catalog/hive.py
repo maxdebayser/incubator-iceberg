@@ -255,7 +255,7 @@ class HiveCatalog(Catalog):
 
         file = io.new_input(metadata_location)
         metadata = FromInputFile.table_metadata(file)
-        return Table(identifier=(table.dbName, table.tableName), metadata=metadata, metadata_location=metadata_location)
+        return Table(identifier=(table.dbName, table.tableName), metadata=metadata, metadata_location=metadata_location, config=)
 
     def _write_metadata(self, metadata: TableMetadata, io: FileIO, metadata_path: str):
         ToOutputFile.table_metadata(metadata, io.new_output(metadata_path))
@@ -308,7 +308,8 @@ class HiveCatalog(Catalog):
         metadata = new_table_metadata(
             location=location, schema=schema, partition_spec=partition_spec, sort_order=sort_order, properties=properties
         )
-        io = load_file_io({**self.properties, **properties}, location=location)
+        config = {**self.properties, **properties}
+        io = load_file_io(config, location=location)
         self._write_metadata(metadata, io, metadata_location)
 
         tbl = HiveTable(
@@ -328,7 +329,7 @@ class HiveCatalog(Catalog):
         except AlreadyExistsException as e:
             raise TableAlreadyExistsError(f"Table {database_name}.{table_name} already exists") from e
 
-        return self._convert_hive_into_iceberg(hive_table, io)
+        return self._convert_hive_into_iceberg(hive_table, io, config)
 
     def load_table(self, identifier: Union[str, Identifier]) -> Table:
         """Loads the table's metadata and returns the table instance.

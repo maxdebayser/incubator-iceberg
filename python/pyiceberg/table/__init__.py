@@ -15,17 +15,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from __future__ import annotations
 
 from typing import Dict, List, Optional
 
 from pydantic import Field
 
+from pyiceberg.io import load_file_io
 from pyiceberg.schema import Schema
 from pyiceberg.table.metadata import TableMetadata
 from pyiceberg.table.partitioning import PartitionSpec
 from pyiceberg.table.snapshots import Snapshot, SnapshotLogEntry
 from pyiceberg.table.sorting import SortOrder
-from pyiceberg.typedef import Identifier
+from pyiceberg.typedef import Identifier, Properties
 from pyiceberg.utils.iceberg_base_model import IcebergBaseModel
 
 
@@ -33,6 +35,7 @@ class Table(IcebergBaseModel):
     identifier: Identifier = Field()
     metadata_location: str = Field()
     metadata: TableMetadata = Field()
+    config: Properties = Field()
 
     def refresh(self):
         """Refresh the current table metadata"""
@@ -57,7 +60,8 @@ class Table(IcebergBaseModel):
     def sort_order(self) -> SortOrder:
         """Return the sort order of this table"""
         return next(
-            sort_order for sort_order in self.metadata.sort_orders if sort_order.order_id == self.metadata.default_sort_order_id
+            sort_order for sort_order in self.metadata.sort_orders if
+            sort_order.order_id == self.metadata.default_sort_order_id
         )
 
     def sort_orders(self) -> Dict[int, SortOrder]:
@@ -90,3 +94,14 @@ class Table(IcebergBaseModel):
     def history(self) -> List[SnapshotLogEntry]:
         """Get the snapshot history of this table."""
         return self.metadata.snapshot_log
+
+    def conf(self) -> Properties:
+        return self.config
+
+    def new_scan(self):
+        from pyiceberg.query import TableScan
+        return TableScan(table=self)
+
+    def io(self):
+        return load_file_io({**self.metadata.properties, **self.config})
+
