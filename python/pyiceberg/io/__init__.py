@@ -283,7 +283,6 @@ def _infer_file_io_from_schema(path: str, properties: Properties) -> Optional[Fi
 
 def load_file_io(properties: Properties, location: Optional[str] = None) -> FileIO:
     # First look for the py-io-impl property to directly load the class
-    print(f"properties: {properties}")
     if io_impl := properties.get(PY_IO_IMPL):
         if file_io := _import_file_io(io_impl, properties):
             logger.info("Loaded FileIO: %s", io_impl)

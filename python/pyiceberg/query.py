@@ -19,11 +19,14 @@ import asyncio
 from itertools import chain
 from typing import Iterable, List, Optional
 
+from pyarrow._fs import PyFileSystem
+from pyarrow.fs import FSSpecHandler
 from s3fs import S3FileSystem
 
 from pyiceberg.expressions.base import BooleanExpression
 from pyiceberg.io import FileIO
-from pyiceberg.io.fsspec import _get_signer
+from pyiceberg.io.fsspec import FsspecFileIO
+from pyiceberg.io.pyarrow import convert_iceberg_schema_to_pyarrow
 from pyiceberg.manifest import ManifestEntry, read_manifest_entry, read_manifest_list
 from pyiceberg.schema import Schema
 from pyiceberg.table import Snapshot, Table
@@ -71,24 +74,27 @@ class TableScan:
         if manifest_list := self.snapshot.manifest_list:
             files = [file.data_file.file_path for file in self.fetch_data_files(manifest_list, io)]
 
+        return files
+
+    @property
+    def dataset(self):
         import pyarrow.dataset as ds
 
         io = self.table.io()
-        if not isinstance(io, S3FileSystem):
-            raise NotImplementedError("Currently we only support S3FS")
+        if not isinstance(io, FsspecFileIO):
+            raise NotImplementedError(f"Currently we only support S3FS, got: {io}")
 
-        ds.dataset("data/", filesystem=io)
+        files = self.files
 
-        dataset = ds.FileSystemDataset.from_paths(
-            ["data_2018.parquet", "data_2019.parquet"],
+        print(f"Got files: {files}")
+        print(f"{files[0]} exists: {io.get_fs('s3').lexists(files[0])}")
+
+        return ds.FileSystemDataset.from_paths(
+            paths=files,
             format=ds.ParquetFileFormat(),
-            filesystem=io,
-            # To be implemented, would be really cool
-            #partitions=[ds.field('year') == 2018, ds.field('year') == 2019]
+            filesystem=PyFileSystem(FSSpecHandler(io.get_fs("s3"))),
+            schema=convert_iceberg_schema_to_pyarrow(self.schema)
         )
-
-        return files
-
 
     def fetch_data_files(self, manifest_path: str, io: FileIO) -> Iterable[ManifestEntry]:
         files = asyncio.run(self.fetch_manifest(manifest_path, io))

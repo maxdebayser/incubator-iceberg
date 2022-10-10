@@ -43,6 +43,7 @@ def tabular_signer(properties: Properties, request: AWSRequest, **_) -> None:
         "uri": request.url,
         "headers": {key: [val] for key, val in request.headers.items()},
     }
+    print(f"Signing for: {request.url}")
     try:
         response = requests.post(f"{signer_url}/v1/aws/s3/sign", headers=signer_headers, json=signer_body)
         response.raise_for_status()
@@ -70,7 +71,7 @@ def _s3(properties: Properties) -> AbstractFileSystem:
         logger.info("Loading signer %s", signer)
         if singer_func := SIGNERS.get(signer):
             singer_func_with_properties = partial(singer_func, properties)
-            register_events["request-created.s3"] = singer_func_with_properties
+            register_events["before-sign.s3"] = singer_func_with_properties
 
             # Disable the AWS Signer
             config_kwargs["signature_version"] = UNSIGNED
