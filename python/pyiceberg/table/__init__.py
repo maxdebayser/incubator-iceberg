@@ -60,8 +60,7 @@ class Table(IcebergBaseModel):
     def sort_order(self) -> SortOrder:
         """Return the sort order of this table"""
         return next(
-            sort_order for sort_order in self.metadata.sort_orders if
-            sort_order.order_id == self.metadata.default_sort_order_id
+            sort_order for sort_order in self.metadata.sort_orders if sort_order.order_id == self.metadata.default_sort_order_id
         )
 
     def sort_orders(self) -> Dict[int, SortOrder]:
@@ -100,8 +99,9 @@ class Table(IcebergBaseModel):
 
     def new_scan(self):
         from pyiceberg.query import TableScan
+
         return TableScan(table=self)
 
     def io(self):
-        return load_file_io({**self.metadata.properties, **self.config})
-
+        properties = {**self.metadata.properties, **self.config}
+        return load_file_io(properties)

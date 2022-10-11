@@ -19,7 +19,6 @@ from functools import singledispatch
 from typing import (
     Any,
     Dict,
-    Iterator,
     List,
     Optional,
     Union,
@@ -133,20 +132,16 @@ class ManifestFile(IcebergBaseModel):
         return list(read_manifest_entry(file))
 
 
-def read_manifest_entry(input_file: InputFile) -> Iterator[ManifestEntry]:
+def read_manifest_entry(input_file: InputFile) -> List[ManifestEntry]:
     with AvroFile(input_file) as reader:
         schema = reader.schema
-        for record in reader:
-            dict_repr = _convert_pos_to_dict(schema, record)
-            yield ManifestEntry(**dict_repr)
+        return [ManifestEntry(**_convert_pos_to_dict(schema, record)) for record in reader]
 
 
-def read_manifest_list(input_file: InputFile) -> Iterator[ManifestFile]:
+def read_manifest_list(input_file: InputFile) -> List[ManifestFile]:
     with AvroFile(input_file) as reader:
         schema = reader.schema
-        for record in reader:
-            dict_repr = _convert_pos_to_dict(schema, record)
-            yield ManifestFile(**dict_repr)
+        return [ManifestFile(**_convert_pos_to_dict(schema, record)) for record in reader]
 
 
 @singledispatch

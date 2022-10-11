@@ -16,7 +16,7 @@
 # under the License.
 """FileIO implementation for reading and writing table files that uses fsspec compatible filesystems"""
 import logging
-from functools import lru_cache, partial
+from functools import partial
 from typing import Callable, Dict, Union
 from urllib.parse import urlparse
 
@@ -34,7 +34,7 @@ from pyiceberg.typedef import Properties
 logger = logging.getLogger(__name__)
 
 
-def tabular_signer(properties: Properties, request: AWSRequest, **_) -> None:
+def tabular_signer(properties: Properties, request: AWSRequest, **_) -> AWSRequest:
     signer_url = properties["uri"].rstrip("/")
     signer_headers = {"Authorization": f"Bearer {properties['token']}"}
     signer_body = {
@@ -43,7 +43,6 @@ def tabular_signer(properties: Properties, request: AWSRequest, **_) -> None:
         "uri": request.url,
         "headers": {key: [val] for key, val in request.headers.items()},
     }
-    print(f"Signing for: {request.url}")
     try:
         response = requests.post(f"{signer_url}/v1/aws/s3/sign", headers=signer_headers, json=signer_body)
         response.raise_for_status()
@@ -54,8 +53,10 @@ def tabular_signer(properties: Properties, request: AWSRequest, **_) -> None:
     for key, value in response_json["headers"].items():
         request.headers.add_header(key, value[0])
 
+    return request
 
-SIGNERS: Dict[str, Callable[[Properties, AWSRequest], None]] = {"tabular": tabular_signer}
+
+SIGNERS: Dict[str, Callable[[Properties, AWSRequest], AWSRequest]] = {"tabular": tabular_signer}
 
 
 def _s3(properties: Properties) -> AbstractFileSystem:
@@ -71,7 +72,7 @@ def _s3(properties: Properties) -> AbstractFileSystem:
         logger.info("Loading signer %s", signer)
         if singer_func := SIGNERS.get(signer):
             singer_func_with_properties = partial(singer_func, properties)
-            register_events["before-sign.s3"] = singer_func_with_properties
+            register_events["request-created.s3"] = singer_func_with_properties
 
             # Disable the AWS Signer
             config_kwargs["signature_version"] = UNSIGNED
@@ -81,7 +82,7 @@ def _s3(properties: Properties) -> AbstractFileSystem:
     fs = S3FileSystem(client_kwargs=client_kwargs, config_kwargs=config_kwargs)
 
     for event_name, event_function in register_events.items():
-        fs.s3.meta.events.register_last(event_name, event_function)
+        fs.s3.meta.events.register_last(event_name, event_function, unique_id=1925)
 
     return fs
 
@@ -124,7 +125,10 @@ class FsspecInputFile(InputFile):
         Returns:
             OpenFile: An fsspec compliant file-like object
         """
-        return self._fs.open(self.location, "rb")
+        try:
+            return self._fs.open(self.location, "rb")
+        except PermissionError as e:
+            raise PermissionError(f"Could not open: {self.location}") from e
 
 
 class FsspecOutputFile(OutputFile):
@@ -185,7 +189,6 @@ class FsspecFileIO(FileIO):
     def __init__(self, properties: Properties):
         self._scheme_to_fs = {}
         self._scheme_to_fs.update(SCHEME_TO_FS)
-        self.get_fs: Callable = lru_cache(self._get_fs)
         super().__init__(properties=properties)
 
     def new_input(self, location: str) -> FsspecInputFile:
@@ -231,7 +234,7 @@ class FsspecFileIO(FileIO):
         fs = self.get_fs(uri.scheme)
         fs.rm(str_location)
 
-    def _get_fs(self, scheme: str) -> AbstractFileSystem:
+    def get_fs(self, scheme: str) -> AbstractFileSystem:
         """Get a filesystem for a specific scheme"""
         if scheme not in self._scheme_to_fs:
             raise ValueError(f"No registered filesystem for scheme: {scheme}")

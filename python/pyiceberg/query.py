@@ -15,13 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 from __future__ import annotations
-import asyncio
+
 from itertools import chain
 from typing import Iterable, List, Optional
 
 from pyarrow._fs import PyFileSystem
 from pyarrow.fs import FSSpecHandler
-from s3fs import S3FileSystem
 
 from pyiceberg.expressions.base import BooleanExpression
 from pyiceberg.io import FileIO
@@ -38,11 +37,11 @@ class TableScan:
     schema: Schema
 
     def __init__(
-            self,
-            table: Table,
-            snapshot_id: Optional[int] = None,
-            schema: Optional[Schema] = None,
-            filter_expr: Optional[BooleanExpression] = None,
+        self,
+        table: Table,
+        snapshot_id: Optional[int] = None,
+        schema: Optional[Schema] = None,
+        filter_expr: Optional[BooleanExpression] = None,
     ):
         self.table = table
         if snapshot_id is None:
@@ -70,41 +69,35 @@ class TableScan:
     @property
     def files(self) -> List[str]:
         io = self.table.io()
-        files = []
         if manifest_list := self.snapshot.manifest_list:
-            files = [file.data_file.file_path for file in self.fetch_data_files(manifest_list, io)]
-
-        return files
+            return [file.data_file.file_path for file in self.fetch_data_files(manifest_list, io)]
+        return []
 
     @property
     def dataset(self):
         import pyarrow.dataset as ds
 
+        files = self.files
+
         io = self.table.io()
         if not isinstance(io, FsspecFileIO):
             raise NotImplementedError(f"Currently we only support S3FS, got: {io}")
-
-        files = self.files
-
-        print(f"Got files: {files}")
-        print(f"{files[0]} exists: {io.get_fs('s3').lexists(files[0])}")
 
         return ds.FileSystemDataset.from_paths(
             paths=files,
             format=ds.ParquetFileFormat(),
             filesystem=PyFileSystem(FSSpecHandler(io.get_fs("s3"))),
-            schema=convert_iceberg_schema_to_pyarrow(self.schema)
+            schema=convert_iceberg_schema_to_pyarrow(self.schema),
         )
 
     def fetch_data_files(self, manifest_path: str, io: FileIO) -> Iterable[ManifestEntry]:
-        files = asyncio.run(self.fetch_manifest(manifest_path, io))
-        return chain.from_iterable(files)
+        return chain.from_iterable(self.fetch_manifest(manifest_path, io))
 
-    async def fetch_manifest_entries(self, manifest_path: str, io: FileIO) -> List[ManifestEntry]:
+    def fetch_manifest_entries(self, manifest_path: str, io: FileIO) -> List[ManifestEntry]:
         file = io.new_input(manifest_path)
         return list(read_manifest_entry(file))
 
-    async def fetch_manifest(self, manifest_list: str, io: FileIO) -> List[List[ManifestEntry]]:
+    def fetch_manifest(self, manifest_list: str, io: FileIO) -> List[List[ManifestEntry]]:
         file = io.new_input(manifest_list)
-        return [await self.fetch_manifest_entries(manifest.manifest_path, io) for manifest in read_manifest_list(file)]
-
+        entries = list(read_manifest_list(file))
+        return [self.fetch_manifest_entries(manifest.manifest_path, io) for manifest in entries]
