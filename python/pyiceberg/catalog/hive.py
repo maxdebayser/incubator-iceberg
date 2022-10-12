@@ -239,7 +239,7 @@ class HiveCatalog(Catalog):
         super().__init__(name, **properties)
         self._client = _HiveClient(properties["uri"])
 
-    def _convert_hive_into_iceberg(self, table: HiveTable, io: FileIO) -> Table:
+    def _convert_hive_into_iceberg(self, table: HiveTable, io: FileIO, config: Properties) -> Table:
         properties: Dict[str, str] = table.parameters
         if TABLE_TYPE not in properties:
             raise NoSuchTableError(f"Property table_type missing, could not determine type: {table.dbName}.{table.tableName}")
@@ -255,7 +255,9 @@ class HiveCatalog(Catalog):
 
         file = io.new_input(metadata_location)
         metadata = FromInputFile.table_metadata(file)
-        return Table(identifier=(table.dbName, table.tableName), metadata=metadata, metadata_location=metadata_location)
+        return Table(
+            identifier=(table.dbName, table.tableName), metadata=metadata, metadata_location=metadata_location, config=config
+        )
 
     def _write_metadata(self, metadata: TableMetadata, io: FileIO, metadata_path: str):
         ToOutputFile.table_metadata(metadata, io.new_output(metadata_path))
@@ -308,7 +310,8 @@ class HiveCatalog(Catalog):
         metadata = new_table_metadata(
             location=location, schema=schema, partition_spec=partition_spec, sort_order=sort_order, properties=properties
         )
-        io = load_file_io({**self.properties, **properties}, location=location)
+        config = {**self.properties, **properties}
+        io = load_file_io(config, location=location)
         self._write_metadata(metadata, io, metadata_location)
 
         tbl = HiveTable(
@@ -328,7 +331,7 @@ class HiveCatalog(Catalog):
         except AlreadyExistsException as e:
             raise TableAlreadyExistsError(f"Table {database_name}.{table_name} already exists") from e
 
-        return self._convert_hive_into_iceberg(hive_table, io)
+        return self._convert_hive_into_iceberg(hive_table, io, config)
 
     def load_table(self, identifier: Union[str, Identifier]) -> Table:
         """Loads the table's metadata and returns the table instance.
@@ -352,8 +355,9 @@ class HiveCatalog(Catalog):
         except NoSuchObjectException as e:
             raise NoSuchTableError(f"Table does not exists: {table_name}") from e
 
-        io = load_file_io({**self.properties, **hive_table.parameters}, hive_table.sd.location)
-        return self._convert_hive_into_iceberg(hive_table, io)
+        config = {**self.properties, **hive_table.parameters}
+        io = load_file_io(config, hive_table.sd.location)
+        return self._convert_hive_into_iceberg(hive_table, io, config)
 
     def drop_table(self, identifier: Union[str, Identifier]) -> None:
         """Drop a table.

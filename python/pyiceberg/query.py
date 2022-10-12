@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from itertools import chain
 from typing import Iterable, List, Optional
+from urllib.parse import urlparse
 
 from pyarrow._fs import PyFileSystem
 from pyarrow.fs import FSSpecHandler
@@ -25,7 +26,7 @@ from pyarrow.fs import FSSpecHandler
 from pyiceberg.expressions.base import BooleanExpression
 from pyiceberg.io import FileIO
 from pyiceberg.io.fsspec import FsspecFileIO
-from pyiceberg.io.pyarrow import convert_iceberg_schema_to_pyarrow
+from pyiceberg.io.pyarrow import PyArrowFileIO, convert_iceberg_schema_to_pyarrow
 from pyiceberg.manifest import ManifestEntry, read_manifest_entry, read_manifest_list
 from pyiceberg.schema import Schema
 from pyiceberg.table import Snapshot, Table
@@ -79,14 +80,25 @@ class TableScan:
 
         files = self.files
 
+        if not files:
+            # Temporary
+            raise ValueError("Empty query")
+
         io = self.table.io()
-        if not isinstance(io, FsspecFileIO):
-            raise NotImplementedError(f"Currently we only support S3FS, got: {io}")
+        if isinstance(io, FsspecFileIO):
+            fs = PyFileSystem(FSSpecHandler(io.get_fs("s3")))
+        elif isinstance(io, PyArrowFileIO):
+            # We should not use internal methods
+            fs = io._get_fs_and_path(files[0])[0]
+            # This is also awkward, PyArrow requires removing the s3a://
+            files = ["".join(urlparse(file)[1:3]) for file in files]
+        else:
+            raise ValueError(f"Unsupported FileSystem: {io}")
 
         return ds.FileSystemDataset.from_paths(
             paths=files,
             format=ds.ParquetFileFormat(),
-            filesystem=PyFileSystem(FSSpecHandler(io.get_fs("s3"))),
+            filesystem=fs,
             schema=convert_iceberg_schema_to_pyarrow(self.schema),
         )
 
