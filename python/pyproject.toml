@@ -84,6 +84,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.extras]
 pyarrow = ["pyarrow"]
+duckdb = ["duckdb"]
 snappy = ["python-snappy"]
 hive = ["thrift"]
 s3fs = ["s3fs"]
@@ -180,6 +181,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "botocore.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "duckdb.*"
 ignore_missing_imports = true
 
 [tool.coverage.run]
