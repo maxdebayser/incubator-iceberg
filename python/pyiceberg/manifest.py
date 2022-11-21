@@ -136,13 +136,11 @@ class ManifestFile(IcebergBaseModel):
 def read_manifest_entry(input_file: InputFile) -> Iterator[ManifestEntry]:
     with AvroFile(input_file) as reader:
         schema = reader.schema
-        for record in reader:
-            dict_repr = _convert_pos_to_dict(schema, record)
-            yield ManifestEntry(**dict_repr)
+        return [ManifestEntry(**_convert_pos_to_dict(schema, record)) for record in reader]
 
 
 def live_entries(input_file: InputFile) -> Iterator[ManifestEntry]:
-    return filter(lambda entry: entry.status != ManifestEntryStatus.DELETED, read_manifest_entry(input_file))
+    return (entry for entry in read_manifest_entry(input_file) if entry.status != ManifestEntryStatus.DELETED)
 
 
 def files(input_file: InputFile) -> Iterator[DataFile]:
@@ -152,9 +150,7 @@ def files(input_file: InputFile) -> Iterator[DataFile]:
 def read_manifest_list(input_file: InputFile) -> Iterator[ManifestFile]:
     with AvroFile(input_file) as reader:
         schema = reader.schema
-        for record in reader:
-            dict_repr = _convert_pos_to_dict(schema, record)
-            yield ManifestFile(**dict_repr)
+        return [ManifestFile(**_convert_pos_to_dict(schema, record)) for record in reader]
 
 
 @singledispatch

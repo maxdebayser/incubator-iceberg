@@ -259,9 +259,7 @@ class _DictAsStruct(StructProtocol):
     wrapped: dict[str, Any]
 
     def __init__(self, partition_type: StructType):
-        self.pos_to_name = {}
-        for pos, field in enumerate(partition_type.fields):
-            self.pos_to_name[pos] = field.name
+        self.pos_to_name = {pos: field.name for pos, field in enumerate(partition_type.fields)}
 
     def wrap(self, to_wrap: dict[str, Any]) -> _DictAsStruct:
         self.wrapped = to_wrap
@@ -287,10 +285,10 @@ class DataScan(TableScan["DataScan"]):
     ):
         super().__init__(table, row_filter, partition_filter, selected_fields, case_sensitive, snapshot_id, options)
 
-    def plan_files(self) -> Iterator[ScanTask]:
+    def plan_files(self) -> List[ScanTask]:
         snapshot = self.snapshot()
         if not snapshot:
-            return ()
+            return []
 
         io = self.table.io
 
@@ -302,10 +300,11 @@ class DataScan(TableScan["DataScan"]):
             spec = self.table.specs()[spec_id]
             return visitors.manifest_evaluator(spec, self.table.schema(), self.partition_filter, self.case_sensitive)
 
-        def partition_summary_filter(manifest_file: ManifestFile) -> bool:
-            return manifest_filter(manifest_file.partition_spec_id)(manifest_file)
-
-        manifests = list(filter(partition_summary_filter, snapshot.manifests(io)))
+        manifests = [
+            manifest_file
+            for manifest_file in snapshot.manifests(io)
+            if manifest_filter(manifest_file.partition_spec_id)(manifest_file)
+        ]
 
         # step 2: filter the data files in each manifest
         # this filter depends on the partition spec used to write the manifest file
@@ -325,12 +324,17 @@ class DataScan(TableScan["DataScan"]):
 
             return lambda data_file: evaluator(wrapper.wrap(data_file.partition))
 
+        matching_files = []
+
         for manifest in manifests:
             partition_filter = partition_evaluator(manifest.partition_spec_id)
             all_files = files(io.new_input(manifest.manifest_path))
             matching_partition_files = filter(partition_filter, all_files)
 
-            yield from (FileScanTask(file) for file in matching_partition_files)
+            for file in matching_partition_files:
+                matching_files.append(FileScanTask(file))
+
+        return matching_files
 
     def to_arrow(self):
         from pyiceberg.io.pyarrow import PyArrowFileIO
