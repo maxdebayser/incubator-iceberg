@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from functools import cache
+from functools import lru_cache
 from typing import (
     Any,
     Callable,
@@ -297,7 +297,7 @@ class DataScan(TableScan["DataScan"]):
         # step 1: filter manifests using partition summaries
         # the filter depends on the partition spec used to write the manifest file, so create a cache of filters for each spec id
 
-        @cache
+        @lru_cache(maxsize=None)
         def manifest_filter(spec_id: int) -> Callable[[ManifestFile], bool]:
             spec = self.table.specs()[spec_id]
             return visitors.manifest_evaluator(spec, self.table.schema(), self.partition_filter, self.case_sensitive)
@@ -310,7 +310,7 @@ class DataScan(TableScan["DataScan"]):
         # step 2: filter the data files in each manifest
         # this filter depends on the partition spec used to write the manifest file
 
-        @cache
+        @lru_cache(maxsize=None)
         def partition_evaluator(spec_id: int) -> Callable[[DataFile], bool]:
             spec = self.table.specs()[spec_id]
             partition_type = spec.partition_type(self.table.schema())

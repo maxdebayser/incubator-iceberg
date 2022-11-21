@@ -133,7 +133,7 @@ def load_catalog(name: str, **properties: Optional[str]) -> Catalog:
         catalog_type = infer_catalog_type(name, conf)
 
     if catalog_type:
-        return AVAILABLE_CATALOGS[catalog_type](name, cast(dict[str, str], conf))
+        return AVAILABLE_CATALOGS[catalog_type](name, conf)
 
     raise ValueError(f"Could not initialize catalog with the following properties: {properties}")
 
