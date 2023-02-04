@@ -43,8 +43,7 @@ from urllib.parse import urlparse
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
-import pyarrow.parquet as pq
-from pyarrow._dataset import FileFragment, Scanner
+from pyarrow._dataset import Scanner
 from pyarrow.fs import (
     FileInfo,
     FileSystem,
@@ -63,9 +62,7 @@ from pyiceberg.expressions import (
 from pyiceberg.expressions.visitors import (
     BoundBooleanExpressionVisitor,
     bind,
-    expression_to_plain_format,
     extract_field_ids,
-    rewrite_to_dnf,
     translate_column_names,
 )
 from pyiceberg.expressions.visitors import visit as boolean_expression_visit
@@ -303,8 +300,7 @@ class PyArrowFileIO(FileIO):
         """
         scheme, path = self.parse_location(location)
         fs = self._get_fs(scheme)
-        return PyArrowFile(fs=fs, location=location, path=path,
-                           buffer_size=int(self.properties.get(BUFFER_SIZE, ONE_MEGABYTE)))
+        return PyArrowFile(fs=fs, location=location, path=path, buffer_size=int(self.properties.get(BUFFER_SIZE, ONE_MEGABYTE)))
 
     def delete(self, location: Union[str, InputFile, OutputFile]) -> None:
         """Delete the file at the given location
@@ -476,22 +472,18 @@ def expression_to_pyarrow(expr: BooleanExpression) -> pc.Expression:
 
 
 def _file_to_table(
-        fs: FileSystem,
-        task: FileScanTask,
-        bound_row_filter: BooleanExpression,
-        projected_schema: Schema,
-        projected_field_ids: Set[int],
-        case_sensitive: bool,
+    fs: FileSystem,
+    task: FileScanTask,
+    bound_row_filter: BooleanExpression,
+    projected_schema: Schema,
+    projected_field_ids: Set[int],
+    case_sensitive: bool,
 ) -> pa.Table:
     _, path = PyArrowFileIO.parse_location(task.file.file_path)
-    parquet_format = ds.ParquetFileFormat(
-        use_buffered_stream=True,
-        pre_buffer=True,
-        buffer_size=8 * ONE_MEGABYTE
-    )
+    parquet_format = ds.ParquetFileFormat(use_buffered_stream=True, pre_buffer=True, buffer_size=8 * ONE_MEGABYTE)
 
     with fs.open_input_file(path) as fout:
-        fragment = parquet_format.make_fragment(fout, None)
+        fragment = parquet_format.make_fragment(fout)
         schema = fragment.physical_schema
         schema_raw = None
         if metadata := schema.metadata:
@@ -514,18 +506,14 @@ def _file_to_table(
             raise ValueError(f"Missing Iceberg schema in Metadata for file: {path}")
 
         arrow_table = Scanner.from_fragment(
-            fragment=fragment,
-            schema=schema,
-            columns=[col.name for col in file_project_schema.columns],
-            filter=pyarrow_filter
+            fragment=fragment, schema=schema, columns=[col.name for col in file_project_schema.columns], filter=pyarrow_filter
         ).to_table(schema=schema)
 
         return to_requested_schema(projected_schema, file_project_schema, arrow_table)
 
 
 def project_table(
-        tasks: Iterable[FileScanTask], table: Table, row_filter: BooleanExpression, projected_schema: Schema,
-        case_sensitive: bool
+    tasks: Iterable[FileScanTask], table: Table, row_filter: BooleanExpression, projected_schema: Schema, case_sensitive: bool
 ) -> pa.Table:
     """Resolves the right columns based on the identifier
 
@@ -555,8 +543,7 @@ def project_table(
     with ThreadPool() as pool:
         tables = pool.starmap(
             func=_file_to_table,
-            iterable=[(fs, task, bound_row_filter, projected_schema, projected_field_ids, case_sensitive) for task in
-                      tasks],
+            iterable=[(fs, task, bound_row_filter, projected_schema, projected_field_ids, case_sensitive) for task in tasks],
             chunksize=None,
             # we could use this to control how to materialize the generator of tasks (we should also make the expression above lazy)
         )
@@ -568,8 +555,7 @@ def project_table(
 
 
 def to_requested_schema(requested_schema: Schema, file_schema: Schema, table: pa.Table) -> pa.Table:
-    struct_array = visit_with_partner(requested_schema, table, ArrowProjectionVisitor(file_schema),
-                                      ArrowAccessor(file_schema))
+    struct_array = visit_with_partner(requested_schema, table, ArrowProjectionVisitor(file_schema), ArrowAccessor(file_schema))
 
     arrays = []
     fields = []
@@ -592,12 +578,11 @@ class ArrowProjectionVisitor(SchemaWithPartnerVisitor[pa.Array, Optional[pa.Arra
             return values.cast(schema_to_pyarrow(promote(file_field.field_type, field.field_type)))
         return values
 
-    def schema(self, schema: Schema, schema_partner: Optional[pa.Array], struct_result: Optional[pa.Array]) -> Optional[
-        pa.Array]:
+    def schema(self, schema: Schema, schema_partner: Optional[pa.Array], struct_result: Optional[pa.Array]) -> Optional[pa.Array]:
         return struct_result
 
     def struct(
-            self, struct: StructType, struct_array: Optional[pa.Array], field_results: List[Optional[pa.Array]]
+        self, struct: StructType, struct_array: Optional[pa.Array], field_results: List[Optional[pa.Array]]
     ) -> Optional[pa.Array]:
         if struct_array is None:
             return None
@@ -620,8 +605,7 @@ class ArrowProjectionVisitor(SchemaWithPartnerVisitor[pa.Array, Optional[pa.Arra
     def field(self, field: NestedField, _: Optional[pa.Array], field_array: Optional[pa.Array]) -> Optional[pa.Array]:
         return field_array
 
-    def list(self, list_type: ListType, list_array: Optional[pa.Array], value_array: Optional[pa.Array]) -> Optional[
-        pa.Array]:
+    def list(self, list_type: ListType, list_array: Optional[pa.Array], value_array: Optional[pa.Array]) -> Optional[pa.Array]:
         return (
             pa.ListArray.from_arrays(list_array.offsets, self.cast_if_needed(list_type.element_field, value_array))
             if isinstance(list_array, pa.ListArray)
@@ -629,8 +613,7 @@ class ArrowProjectionVisitor(SchemaWithPartnerVisitor[pa.Array, Optional[pa.Arra
         )
 
     def map(
-            self, map_type: MapType, map_array: Optional[pa.Array], key_result: Optional[pa.Array],
-            value_result: Optional[pa.Array]
+        self, map_type: MapType, map_array: Optional[pa.Array], key_result: Optional[pa.Array], value_result: Optional[pa.Array]
     ) -> Optional[pa.Array]:
         return (
             pa.MapArray.from_arrays(
