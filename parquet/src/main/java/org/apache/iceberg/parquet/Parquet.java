@@ -1004,7 +1004,12 @@ public class Parquet {
     public <D> CloseableIterable<D> build() {
       if (readerFunc != null || batchedReaderFunc != null) {
         ParquetReadOptions.Builder optionsBuilder;
-        if (file instanceof HadoopInputFile) {
+        if (!HadoopDependency.isHadoopCommonOnClasspath(Parquet.class.getClassLoader())) {
+          // when Hadoop isn't available, make sure to use the Airlift codec factory
+          optionsBuilder = ParquetReadOptions.builder();
+          // page size not used by decompressors
+          optionsBuilder.withCodecFactory(new AirliftCodecFactory());
+        } else if (file instanceof HadoopInputFile) {
           // remove read properties already set that may conflict with this read
           Configuration conf = new Configuration(((HadoopInputFile) file).getConf());
           for (String property : READ_PROPERTIES_TO_REMOVE) {

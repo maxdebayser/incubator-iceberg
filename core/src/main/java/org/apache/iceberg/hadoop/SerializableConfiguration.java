@@ -33,6 +33,10 @@ public class SerializableConfiguration implements Serializable {
     this.hadoopConf = hadoopConf;
   }
 
+  public SerializableConfiguration(Object hadoopConf) {
+    this.hadoopConf = (Configuration) hadoopConf;
+  }
+
   private void writeObject(ObjectOutputStream out) throws IOException {
     out.defaultWriteObject();
     hadoopConf.write(out);
@@ -46,5 +50,11 @@ public class SerializableConfiguration implements Serializable {
 
   public Configuration get() {
     return hadoopConf;
+  }
+
+  @Override
+  @SuppressWarnings({"checkstyle:NoClone", "checkstyle:SuperClone"})
+  public SerializableConfiguration clone() {
+    return new SerializableConfiguration(new Configuration(hadoopConf));
   }
 }
