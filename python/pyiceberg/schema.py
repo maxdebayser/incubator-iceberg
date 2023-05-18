@@ -107,7 +107,7 @@ class Schema(IcebergBaseModel):
             return False
 
         identifier_field_ids_is_equal = self.identifier_field_ids == other.identifier_field_ids
-        schema_is_equal = all([lhs == rhs for lhs, rhs in zip(self.columns, other.columns)])
+        schema_is_equal = all(lhs == rhs for lhs, rhs in zip(self.columns, other.columns))
 
         return identifier_field_ids_is_equal and schema_is_equal
 
@@ -1364,3 +1364,12 @@ def _(file_type: DecimalType, read_type: IcebergType) -> IcebergType:
             raise ResolveError(f"Cannot reduce precision from {file_type} to {read_type}")
     else:
         raise ResolveError(f"Cannot promote an decimal to {read_type}")
+
+
+@promote.register(FixedType)
+def _(file_type: FixedType, read_type: IcebergType) -> IcebergType:
+    if isinstance(read_type, UUIDType) and len(file_type) == 16:
+        # Since pyarrow reads parquet UUID as fixed 16-byte binary, the promotion is needed to ensure read compatibility
+        return read_type
+    else:
+        raise ResolveError(f"Cannot promote {file_type} to {read_type}")
